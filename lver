@@ -13,7 +13,7 @@ Arguments:
     --serverless-yaml-path : Path to the serverless.yml file containing Lambda function definitions.
 
 Example:
-    ./script_name.py --serverless-yaml-path /path/to/serverless.yml
+    ./lver --serverless-yaml-path /path/to/serverless.yml
 """
 
 import boto3
