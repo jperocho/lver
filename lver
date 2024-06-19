@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+
+"""
+Script to manage AWS Lambda function versions.
+
+This script deletes older versions of AWS Lambda functions specified in a serverless.yml file,
+keeping only the five most recent versions.
+
+Usage:
+    ./script_name.py --serverless-yaml-path ../../bluering-procurement-services/serverless.yml
+
+Arguments:
+    --serverless-yaml-path : Path to the serverless.yml file containing Lambda function definitions.
+
+Example:
+    ./script_name.py --serverless-yaml-path /path/to/serverless.yml
+"""
+
+import boto3
+import yaml
+from pathlib import Path
+import logging
+import argparse
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Initialize the AWS Lambda client
+lambda_client = boto3.client('lambda')
+
+def get_versions(function_name):
+    """
+    Retrieve all versions of the given Lambda function except the $LATEST version.
+
+    Args:
+        function_name (str): The name of the Lambda function.
+
+    Returns:
+        list: A sorted list of version numbers in descending order.
+    """
+    try:
+        paginator = lambda_client.get_paginator('list_versions_by_function')
+        versions = [
+            version['Version'] 
+            for page in paginator.paginate(FunctionName=function_name)
+            for version in page['Versions']
+            if version['Version'] != '$LATEST'
+        ]
+
+        sorted_versions = sorted(versions, key=int, reverse=True)
+        return sorted_versions
+    except boto3.exceptions.Boto3Error as e:
+        logging.error(f"Error retrieving versions for function {function_name}: {e}")
+        return []
+
+def delete_lambda_function_version(function_name, version, number_deleted, total_to_delete):
+    """
+    Delete a specific version of the given Lambda function.
+
+    Args:
+        function_name (str): The name of the Lambda function.
+        version (str): The version number to delete.
+        number_deleted (int): The current number of versions deleted.
+        total_to_delete (int): The total number of versions to delete.
+    """
+    try:
+        lambda_client.delete_function(FunctionName=function_name, Qualifier=version)
+        logging.info(f"Deleted function version {version} of {function_name} [{number_deleted}/{total_to_delete}]")
+    except boto3.exceptions.Boto3Error as e:
+        logging.error(f"Error deleting function version {version} of {function_name}: {e}")
+
+def main(serverless_yaml_path):
+    """
+    Main function to process the serverless.yml file and delete old Lambda function versions.
+
+    Args:
+        serverless_yaml_path (str): The path to the serverless.yml file.
+    """
+    try:
+        # Load the serverless.yml file
+        serverless = yaml.safe_load(Path(serverless_yaml_path).read_text())
+        serverless_functions = serverless.get('functions', {})
+
+        # Process each function in the serverless.yml file
+        for function_key, function_config in serverless_functions.items():
+            function_name = function_config.get('name')
+            if not function_name:
+                logging.warning(f"Function name missing for key: {function_key}")
+                continue
+
+            version_list = get_versions(function_name)
+            if len(version_list) > 5:
+                versions_to_remove = version_list[5:]
+                total_to_delete = len(versions_to_remove)
+                for number_deleted, version in enumerate(versions_to_remove, start=1):
+                    delete_lambda_function_version(function_name, version, number_deleted, total_to_delete)
+            else:
+                logging.info(f"Function {function_name} has 5 or fewer versions, no versions to delete.")
+    except FileNotFoundError:
+        logging.error(f"serverless.yml file not found at path: {serverless_yaml_path}")
+    except yaml.YAMLError as e:
+        logging.error(f"Error parsing YAML file: {e}")
+    except Exception as e:
+        logging.error(f"Unexpected error: {e}")
+
+if __name__ == '__main__':
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='Delete old versions of AWS Lambda functions specified in a serverless.yml file.')
+    parser.add_argument('--serverless-yaml-path', type=str, required=True, help='Path to the serverless.yml file')
+
+    args = parser.parse_args()
+    main(args.serverless_yaml_path)
