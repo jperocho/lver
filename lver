@@ -63,6 +63,10 @@ def delete_lambda_function_version(function_name, version, number_deleted, total
         number_deleted (int): The current number of versions deleted.
         total_to_delete (int): The total number of versions to delete.
     """
+    if not version or version == '$LATEST':
+        logging.error(f"Invalid version '{version}' for function {function_name}")
+        return
+
     try:
         lambda_client.delete_function(FunctionName=function_name, Qualifier=version)
         logging.info(f"Deleted function version {version} of {function_name} [{number_deleted}/{total_to_delete}]")
