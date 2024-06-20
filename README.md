@@ -35,4 +35,4 @@ This script helps manage AWS Lambda function versions by deleting older versions
 ### Example Command
 
 ```sh
-./lver --serverless-yaml-path ../../aws-lambda-services/serverless.yml
+./lver --serverless-yaml-path /path/to/serverless.yml
