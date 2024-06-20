@@ -7,7 +7,7 @@ This script deletes older versions of AWS Lambda functions specified in a server
 keeping only the five most recent versions.
 
 Usage:
-    ./script_name.py --serverless-yaml-path ../../bluering-procurement-services/serverless.yml
+    ./lver --serverless-yaml-path /path/to/serverless.yml
 
 Arguments:
     --serverless-yaml-path : Path to the serverless.yml file containing Lambda function definitions.
