@@ -1,26 +1,21 @@
 #!/usr/bin/env python3
-
 """
-Script to manage AWS Lambda function versions.
-
+Script to manage AWS Lambda function versions in batch.
 This script deletes older versions of AWS Lambda functions specified in a serverless.yml file,
 keeping only the five most recent versions.
-
 Usage:
-    ./lver --serverless-yaml-path /path/to/serverless.yml
-
+./lver --serverless-yaml-path /path/to/serverless.yml
 Arguments:
-    --serverless-yaml-path : Path to the serverless.yml file containing Lambda function definitions.
-
+--serverless-yaml-path : Path to the serverless.yml file containing Lambda function definitions.
 Example:
-    ./lver --serverless-yaml-path /path/to/serverless.yml
+./lver --serverless-yaml-path /path/to/serverless.yml
 """
-
 import boto3
 import yaml
 from pathlib import Path
 import logging
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -41,7 +36,7 @@ def get_versions(function_name):
     try:
         paginator = lambda_client.get_paginator('list_versions_by_function')
         versions = [
-            version['Version'] 
+            version['Version']
             for page in paginator.paginate(FunctionName=function_name)
             for version in page['Versions']
             if version['Version'] != '$LATEST'
@@ -53,53 +48,69 @@ def get_versions(function_name):
         logging.error(f"Error retrieving versions for function {function_name}: {e}")
         return []
 
-def delete_lambda_function_version(function_name, version, number_deleted, total_to_delete):
+def delete_lambda_function_versions(function_name, versions_to_delete):
     """
-    Delete a specific version of the given Lambda function.
-
+    Delete multiple versions of the given Lambda function.
     Args:
-        function_name (str): The name of the Lambda function.
-        version (str): The version number to delete.
-        number_deleted (int): The current number of versions deleted.
-        total_to_delete (int): The total number of versions to delete.
+    function_name (str): The name of the Lambda function.
+    versions_to_delete (list): List of version numbers to delete.
     """
-    if not version or version == '$LATEST':
-        logging.error(f"Invalid version '{version}' for function {function_name}")
+    deleted_count = 0
+    total_to_delete = len(versions_to_delete)
+
+    for version in versions_to_delete:
+        if not version or version == '$LATEST':
+            logging.error(f"Invalid version '{version}' for function {function_name}")
+            continue
+
+        try:
+            lambda_client.delete_function(FunctionName=function_name, Qualifier=version)
+            deleted_count += 1
+            logging.info(f"Deleted function version {version} of {function_name} [{deleted_count}/{total_to_delete}]")
+        except boto3.exceptions.Boto3Error as e:
+            logging.error(f"Error deleting function version {version} of {function_name}: {e}")
+
+    return deleted_count
+
+def process_function(function_key, function_config):
+    """
+    Process a single function from the serverless.yml file.
+    Args:
+    function_key (str): The key of the function in the serverless.yml file.
+    function_config (dict): The configuration of the function.
+    """
+    function_name = function_config.get('name')
+    if not function_name:
+        logging.warning(f"Function name missing for key: {function_key}")
         return
 
-    try:
-        lambda_client.delete_function(FunctionName=function_name, Qualifier=version)
-        logging.info(f"Deleted function version {version} of {function_name} [{number_deleted}/{total_to_delete}]")
-    except boto3.exceptions.Boto3Error as e:
-        logging.error(f"Error deleting function version {version} of {function_name}: {e}")
+    version_list = get_versions(function_name)
+    if len(version_list) > 5:
+        versions_to_remove = version_list[5:]
+        deleted_count = delete_lambda_function_versions(function_name, versions_to_remove)
+        logging.info(f"Deleted {deleted_count} versions for function {function_name}")
+    else:
+        logging.info(f"Function {function_name} has 5 or fewer versions, no versions to delete.")
 
 def main(serverless_yaml_path):
     """
-    Main function to process the serverless.yml file and delete old Lambda function versions.
-
+    Main function to process the serverless.yml file and delete old Lambda function versions in batch.
     Args:
-        serverless_yaml_path (str): The path to the serverless.yml file.
+    serverless_yaml_path (str): The path to the serverless.yml file.
     """
     try:
         # Load the serverless.yml file
         serverless = yaml.safe_load(Path(serverless_yaml_path).read_text())
         serverless_functions = serverless.get('functions', {})
 
-        # Process each function in the serverless.yml file
-        for function_key, function_config in serverless_functions.items():
-            function_name = function_config.get('name')
-            if not function_name:
-                logging.warning(f"Function name missing for key: {function_key}")
-                continue
+        # Process functions in parallel
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(process_function, function_key, function_config)
+                       for function_key, function_config in serverless_functions.items()]
 
-            version_list = get_versions(function_name)
-            if len(version_list) > 5:
-                versions_to_remove = version_list[5:]
-                total_to_delete = len(versions_to_remove)
-                for number_deleted, version in enumerate(versions_to_remove, start=1):
-                    delete_lambda_function_version(function_name, version, number_deleted, total_to_delete)
-            else:
-                logging.info(f"Function {function_name} has 5 or fewer versions, no versions to delete.")
+            for future in as_completed(futures):
+                future.result()  # This will raise any exceptions that occurred during execution
+
     except FileNotFoundError:
         logging.error(f"serverless.yml file not found at path: {serverless_yaml_path}")
     except yaml.YAMLError as e:
